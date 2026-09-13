@@ -8,8 +8,9 @@ import { TagsInput } from '@/components/ui/tags-input'
 import { CityMultiSelect, type CityOption } from '@/components/config/CityMultiSelect'
 import { ResumeUploadSection } from '@/components/config/ResumeUploadSection'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
-import { Save, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
 
 const AI_SERVICES = {
   anthropic: {
@@ -43,7 +44,7 @@ const AI_SERVICES = {
 } as const
 
 type AiService = keyof typeof AI_SERVICES
-type PlatformId = 'boss' | 'zhilian' | '51job'
+type PlatformId = 'boss' | 'zhilian' | '51job' | 'liepin'
 
 const BOSS_FILTER_OPTIONS = {
   job_type: ['全职', '兼职', '实习'],
@@ -62,11 +63,46 @@ export default function ConfigPage() {
     ...(requestedSection ? { [requestedSection]: true } : {}),
   }))
   const [aiTest, setAiTest] = useState<{ testing: boolean; ok?: boolean; message?: string }>({ testing: false })
+  const [modelList, setModelList] = useState<{ loading: boolean; models: string[]; message?: string; error?: boolean }>({ loading: false, models: [] })
+  const modelRequest = useRef<AbortController | null>(null)
   const [cityOptions, setCityOptions] = useState<CityOption[]>([])
   const [zhilianCityOptions, setZhilianCityOptions] = useState<CityOption[]>([])
   const [job51CityOptions, setJob51CityOptions] = useState<CityOption[]>([])
+  const [liepinCityOptions, setLiepinCityOptions] = useState<CityOption[]>([])
   const [cityRefreshing, setCityRefreshing] = useState(false)
   const [cityMessage, setCityMessage] = useState('')
+
+  useEffect(() => {
+    setModelList({ loading: false, models: [] })
+    return () => modelRequest.current?.abort()
+  }, [config?.ai?.service, config?.ai?.provider, config?.ai?.base_url, config?.ai?.api_key, config?.ai?.api_key_masked, config?.ai?.auth_token_masked, config?.ai?.clear_credentials])
+
+  const handleFetchModels = async () => {
+    modelRequest.current?.abort()
+    const controller = new AbortController()
+    modelRequest.current = controller
+    setModelList({ loading: true, models: [] })
+    try {
+      const res = await fetch('/api/config/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ai: config?.ai || {} }),
+        signal: controller.signal,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '获取模型列表失败')
+      if (!Array.isArray(data.models) || !data.models.every((model: unknown) => typeof model === 'string')) {
+        throw new Error('模型列表格式不正确，可手动填写模型 ID')
+      }
+      if (!controller.signal.aborted) setModelList({
+        loading: false,
+        models: data.models,
+        message: data.models.length ? `已获取 ${data.models.length} 个模型，请选择或继续手动填写。` : '服务商未返回可用模型，可手动填写模型 ID。',
+      })
+    } catch (error) {
+      if (!controller.signal.aborted) setModelList({ loading: false, models: [], error: true, message: error instanceof Error ? error.message : '获取模型列表失败，请重试' })
+    }
+  }
 
   useEffect(() => {
     fetch('/api/cities', { cache: 'no-store' })
@@ -86,6 +122,12 @@ export default function ConfigPage() {
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data.cities)) setJob51CityOptions(data.cities)
+      })
+      .catch(() => {})
+    fetch('/api/cities?platform=liepin', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data.cities)) setLiepinCityOptions(data.cities)
       })
       .catch(() => {})
   }, [])
@@ -182,7 +224,7 @@ export default function ConfigPage() {
   }
 
   const updatePlatformCities = (platform: PlatformId, cities: string[]) => {
-    const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : job51CityOptions
+    const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
     const cityCodes = platform !== 'boss'
       ? Object.fromEntries(cities.map(city => {
         const found = platformCityOptions.find(option => option.name.replace(/市$/, '') === city.replace(/市$/, ''))
@@ -197,7 +239,7 @@ export default function ConfigPage() {
   const setPlatformEnabled = (platform: PlatformId, enabled: boolean) => {
     updateConfig(`platforms.${platform}.enabled`, enabled)
     const currentOrder: PlatformId[] = Array.isArray(config?.collection?.default_order)
-      ? config.collection.default_order.filter((item: unknown): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job')
+      ? config.collection.default_order.filter((item: unknown): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job' || item === 'liepin')
       : ['boss'] as PlatformId[]
     const nextOrder = enabled
       ? [...currentOrder, ...(!currentOrder.includes(platform) ? [platform] : [])]
@@ -206,8 +248,8 @@ export default function ConfigPage() {
   }
 
   const setCollectionOrder = (value: string) => {
-    const enabled = (['boss', 'zhilian', '51job'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled !== false)
-    const requested = value.split(',').filter((item): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job')
+    const enabled = (['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled !== false)
+    const requested = value.split(',').filter((item): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job' || item === 'liepin')
     const next = [...requested, ...enabled.filter(platform => !requested.includes(platform))]
     updateConfig('collection.default_order', next.length ? next : ['boss'])
   }
@@ -345,12 +387,12 @@ export default function ConfigPage() {
         <SectionCard title="搜索设置" sectionKey="search" expanded={expandedSections} toggle={toggleSection}>
           <div className="space-y-4">
             <p className="rounded-xl border border-card-border bg-[#FFFCFA] px-3 py-2 text-xs leading-5 text-muted">
-              智联和前程无忧只自动采集、评分和生成招呼语；岗位池会提供原平台链接，你完成投递后可手动标记“已发送”。BossHunter 不会替你在这两个平台发送、回复或监听。
+              智联、前程无忧和猎聘只自动采集、评分和生成招呼语；岗位池会提供原平台链接，你完成投递后可手动标记“已发送”。BossHunter 不会替你在这些平台发送、回复或监听。
             </p>
-            {(['boss', 'zhilian', '51job'] as PlatformId[]).map(platform => {
+            {(['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).map(platform => {
               const search = platformSearch(platform)
-              const label = platform === 'boss' ? 'BOSS 直聘' : platform === 'zhilian' ? '智联招聘' : '前程无忧'
-              const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : job51CityOptions
+              const label = PLATFORM_LABELS[platform]
+              const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
               const enabled = config.platforms?.[platform]?.enabled ?? platform === 'boss'
               const cities = Array.isArray(search.cities) && search.cities.length
                 ? search.cities
@@ -381,7 +423,7 @@ export default function ConfigPage() {
                       /> : <>
                         <Input list={`config-${platform}-city-options`} value={cityInput} onChange={event => updatePlatformCities(platform, event.target.value.split(/[,，]/).map(value => value.trim()).filter(Boolean))} placeholder={platform === '51job' ? '如：上海' : '如：深圳'} />
                         <datalist id={`config-${platform}-city-options`}>{platformCityOptions.map(city => <option key={city.code} value={city.name} />)}</datalist>
-                        <p className="mt-1 text-xs text-muted">{platform === 'zhilian' ? '智联' : '51job'}只使用已验证的城市编码；当前内置 {platformCityOptions.length} 个城市。</p>
+                        <p className="mt-1 text-xs text-muted">{PLATFORM_SHORT_LABELS[platform]}只使用已验证的城市编码；当前内置 {platformCityOptions.length} 个城市。</p>
                         {!!cities.length && <div className="mt-2 flex flex-wrap gap-1">{cities.map((city: string) => {
                           const matched = platformCityOptions.find(option => option.name.replace(/市$/, '') === city.replace(/市$/, ''))
                           return <span key={city} className={`rounded-full px-2 py-1 text-xs ${matched ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{city} · {matched ? '已自动识别' : '暂未收录'}</span>
@@ -458,7 +500,9 @@ export default function ConfigPage() {
                   <option value="boss,zhilian">BOSS 直聘 → 智联招聘</option>
                   <option value="zhilian,boss">智联招聘 → BOSS 直聘</option>
                   <option value="51job">前程无忧</option>
+                  <option value="liepin">猎聘</option>
                   <option value="boss,zhilian,51job">BOSS → 智联 → 前程无忧</option>
+                  <option value="boss,zhilian,51job,liepin">BOSS → 智联 → 前程无忧 → 猎聘</option>
                 </Select>
               </Field>
               <div className="flex items-center justify-between rounded-xl border border-card-border bg-[#FFFCFA] px-3 py-2 text-xs font-bold text-muted">
@@ -500,10 +544,28 @@ export default function ConfigPage() {
               </p>
             </Field>
             <Field label="模型名称">
-              <Input value={config.ai?.model || ''} onChange={e => {
-                updateConfig('ai.model', e.target.value)
-                setAiTest({ testing: false })
-              }} placeholder="填写服务商当前支持的模型 ID" />
+              <div className="flex flex-wrap gap-2">
+                <Input aria-label="模型名称" className="min-w-0 flex-1 basis-40" value={config.ai?.model || ''} onChange={e => {
+                  updateConfig('ai.model', e.target.value)
+                  setAiTest({ testing: false })
+                }} placeholder="填写服务商当前支持的模型 ID" />
+                <Button type="button" variant="secondary" disabled={modelList.loading} onClick={handleFetchModels}>
+                  {modelList.loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
+                  {modelList.loading ? '获取中…' : '获取模型列表'}
+                </Button>
+              </div>
+              {modelList.models.length > 0 && (
+                <Select aria-label="可用模型" className="mt-2 pr-8 appearance-auto" value={modelList.models.includes(config.ai?.model) ? config.ai.model : ''} onChange={e => {
+                  updateConfig('ai.model', e.target.value)
+                  setAiTest({ testing: false })
+                }}>
+                  <option value="" disabled>请选择模型</option>
+                  {modelList.models.map(model => <option key={model} value={model}>{model}</option>)}
+                </Select>
+              )}
+              <p role="status" className={`mt-1 text-xs ${modelList.error ? 'text-danger' : 'text-muted'}`}>
+                {modelList.message || '按当前 Base URL 和 API Key 获取，无需先保存配置。'}
+              </p>
             </Field>
             <Field label="API Key">
               <Input type="password" value={config.ai?.api_key || ''} onChange={e => {
@@ -567,6 +629,29 @@ export default function ConfigPage() {
                 <p className="mt-1 text-xs text-muted">默认关闭；开启后会增加 AI 调用次数。</p>
               </div>
               <Switch checked={config.ai?.scoring_second_review ?? false} onChange={v => updateConfig('ai.scoring_second_review', v)} />
+            </div>
+            <div className="rounded-2xl border border-primary/20 bg-[#FFF8F2] p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <label className="text-sm font-black text-foreground">生成招呼语优化建议</label>
+                  <p className="mt-1 text-xs leading-5 text-muted">保留首次生成原文，同时生成可对比的优化预览和触发原因；关闭后只生成一版。</p>
+                </div>
+                <Switch
+                  checked={config.ai?.greeting_style_suggestions ?? true}
+                  onChange={value => updateConfig('ai.greeting_style_suggestions', value)}
+                />
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-4 border-t border-primary/10 pt-3">
+                <div>
+                  <label className="text-sm font-black text-foreground">自动采用优化版</label>
+                  <p className="mt-1 text-xs leading-5 text-muted">默认关闭。关闭时，发送前必须选择保留原文或采用优化版。</p>
+                </div>
+                <Switch
+                  checked={config.ai?.greeting_auto_apply_style ?? false}
+                  disabled={(config.ai?.greeting_style_suggestions ?? true) === false}
+                  onChange={value => updateConfig('ai.greeting_auto_apply_style', value)}
+                />
+              </div>
             </div>
             <div className="rounded-2xl border border-card-border bg-[#FFFCFA] p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">

@@ -134,6 +134,16 @@ DEFAULTS: dict[str, Any] = {
                 "sort": "default",
             },
         },
+        "liepin": {
+            "enabled": False,
+            "search": {
+                "keywords": [],
+                "cities": [],
+                "city_codes": {},
+                "max_pages": 1,
+                "sort": "default",
+            },
+        },
     },
     "scoring": {
         "threshold": 71,
@@ -165,6 +175,8 @@ DEFAULTS: dict[str, Any] = {
         "greeting_max_attempts": 2,
         "greeting_review_threshold": 7.0,
         "greeting_max_iterations": 2,
+        "greeting_style_suggestions": True,
+        "greeting_auto_apply_style": False,
     },
     "monitor": {
         "interval": 30,  # 分钟
